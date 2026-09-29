@@ -255,7 +255,12 @@ def copy_inference_support_files(model_path, checkpoint_dir, log_print):
         log_print(f"Warning: base model path is not a directory, skipping support file copy: {model_path}")
         return
 
-    def ignore_payloads(_, names):
+    def ignore_payloads(directory, names):
+        # copytree calls this for every subdirectory. Only skip root-level payloads:
+        # subfolder weights such as speech_tokenizer/model.safetensors aren't
+        # re-exported, so skipping them leaves the checkpoint unloadable.
+        if os.path.normpath(directory) != os.path.normpath(model_path):
+            return set()
         return {name for name in names if should_skip_base_artifact(name)}
 
     remove_stale_model_payloads(checkpoint_dir)
@@ -720,18 +725,32 @@ def run_train(
                             codec_i_embedding = codec_i_embedding * codec_mask.unsqueeze(-1)
                             input_embeddings = input_embeddings + codec_i_embedding
 
+                        # Pass unshifted tensors: the talker's causal LM loss shifts labels
+                        # itself. Slicing here as well trained it to predict frame j+2,
+                        # which makes generated speech progressively faster
+                        # (QwenLM/Qwen3-TTS#179, #278, #371).
                         outputs = unwrap_model.talker(
-                            inputs_embeds=input_embeddings[:, :-1, :],
-                            attention_mask=attention_mask[:, :-1],
-                            labels=codec_0_labels[:, 1:],
+                            inputs_embeds=input_embeddings,
+                            attention_mask=attention_mask,
+                            labels=codec_0_labels,
                             output_hidden_states=True,
                         )
 
                         hidden_states = outputs.hidden_states[0][-1]
-                        talker_hidden_states = hidden_states[codec_mask[:, :-1]]
+                        # Generation feeds the sub-talker the hidden state that predicted
+                        # codec 0 of a frame, i.e. the position before it.
+                        prev_mask = torch.zeros_like(codec_mask)
+                        prev_mask[:, :-1] = codec_mask[:, 1:]
+                        talker_hidden_states = hidden_states[prev_mask]
                         talker_codec_ids = codec_ids[codec_mask]
-                        _, sub_talker_loss = unwrap_model.talker.forward_sub_talker_finetune(
+                        sub_talker_logits, _ = unwrap_model.talker.forward_sub_talker_finetune(
                             talker_codec_ids, talker_hidden_states
+                        )
+                        # The logits are already aligned with codebooks 1-15; the package's
+                        # built-in loss shifts them again, so compute it directly.
+                        sub_talker_loss = torch.nn.functional.cross_entropy(
+                            sub_talker_logits.float().reshape(-1, sub_talker_logits.shape[-1]),
+                            talker_codec_ids[:, 1:].reshape(-1),
                         )
                         loss = outputs.loss + 0.3 * sub_talker_loss
 
