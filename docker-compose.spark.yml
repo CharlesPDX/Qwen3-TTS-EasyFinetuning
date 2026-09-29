@@ -1,5 +1,6 @@
-# DGX Spark (GB10, aarch64) override. Layer it on top of the base file:
-#   docker compose -f docker-compose.yml -f docker-compose.spark.yml up --build
+# DGX Spark (GB10, aarch64). Standalone rather than an override of
+# docker-compose.yml, since tools like Dockhand deploy a single compose file:
+#   docker compose -f docker-compose.spark.yml up --build
 services:
   tts-finetuner:
     # The published image is amd64-only. Use a local tag and always build,
@@ -9,3 +10,32 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.spark
+    container_name: qwen3-tts-finetuner
+    # Shared memory size for DataLoader
+    shm_size: '2gb'
+    ports:
+      - "7860:7860"
+      - "6006:6006"
+    volumes:
+      - ./final-dataset:/workspace/final-dataset
+      - ./output:/workspace/output
+      - ./logs:/workspace/logs
+      - ./models:/workspace/models
+      - ./raw-dataset:/workspace/raw-dataset
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - VLLM_USE_MODELSCOPE=true
+      - HF_HOME=/workspace/models/huggingface
+      - MODELSCOPE_CACHE=/workspace/models/modelscope
+      - PYTHONUNBUFFERED=1
