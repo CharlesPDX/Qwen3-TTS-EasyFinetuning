@@ -1,0 +1,11 @@
+# DGX Spark (GB10, aarch64) override. Layer it on top of the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.spark.yml up --build
+services:
+  tts-finetuner:
+    # The published image is amd64-only. Use a local tag and always build,
+    # so compose never pulls it.
+    image: qwen3-tts-easyfinetuning:spark
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
