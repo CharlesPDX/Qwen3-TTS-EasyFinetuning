@@ -80,7 +80,7 @@ global_tts_model_path = None
 global_tts_device = None
 global_training_process = None
 global_inference_busy = False
-global_model_lock = threading.Lock()
+global_model_lock = threading.RLock()  # re-entrant: load_model() calls unload_model() while holding it
 
 # Removed redundant models_config.json loading as it is not present and presets are hardcoded below
 
